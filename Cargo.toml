@@ -1,0 +1,12 @@
+[package]
+name = "novadb-lite"
+edition = "2021"
+authors = ["Minh Tuan"]
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
