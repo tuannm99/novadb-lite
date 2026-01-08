@@ -1,5 +1,13 @@
+use crate::DbResult;
+
+const OFF_LOWER: usize = 0;
+const OFF_UPPER: usize = 2;
+const OFF_SLOT_COUNT: usize = 4;
+const OFF_FLAGS: usize = 6;
+const OFF_RESERVED: usize = 8;
+
 /// page header fixed 16 bytes, trong đó có 8 bytes là reserved
-#[derive(Debug)]
+/// PageHeader chỉ biểu diễn dữ liệu được lưu trong program, chứ k phải layout dưới disk
 pub struct PageHeader {
     /// lower >= HEADER_SIZE (16)
     /// upper <= PAGE_SIZE
@@ -21,8 +29,13 @@ pub struct PageHeader {
     /// - Bits 8..15 : mở rộng sau
     flags: u16,
 
-    /// special field, mở rộng sau này (lsn, checksum, page_type)
+    /// special field, mở rộng sau này (lsn, checksum, future metadata...)
     reserved: u64,
+}
+
+/// PageHeaderView là view đọc/ghi header trực tiếp trên page bytes (on-disk layout)
+pub struct PageHeaderView<'a> {
+    buf: &'a mut [u8],
 }
 
 impl PageHeader {
@@ -46,30 +59,66 @@ impl PageHeader {
     }
 }
 
+impl<'a> PageHeaderView<'a> {
+    pub fn new(buf: &'a mut [u8]) -> DbResult<Self> {
+        todo!()
+    }
+
+    pub fn lower(&self) -> DbResult<u16> {
+        todo!()
+    }
+    pub fn set_lower(&mut self, v: u16) -> DbResult<()> {
+        todo!()
+    }
+    pub fn upper(&self) -> DbResult<u16> {
+        todo!()
+    }
+    pub fn set_upper(&mut self, v: u16) -> DbResult<()> {
+        todo!()
+    }
+    pub fn slot_count(&self) -> DbResult<u16> {
+        todo!()
+    }
+    pub fn set_slot_count(&mut self, v: u16) -> DbResult<()> {
+        todo!()
+    }
+    pub fn flags(&self) -> DbResult<u16> {
+        todo!()
+    }
+    pub fn set_flags(&mut self, v: u16) -> DbResult<()> {
+        todo!()
+    }
+    pub fn reserved(&self) -> DbResult<u64> {
+        todo!()
+    }
+    pub fn set_reserved(&mut self, v: u64) -> DbResult<()> {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::PAGE_SIZE;
-
-    // Giữ các hằng số này thống nhất với thiết kế module page của bạn.
-    const HEADER_SIZE: u16 = 16;
-    const SLOT_SIZE: u16 = 6; // offset:u16 + len:u16 + flags:u16
+    use crate::page::{SLOTTED_HEADER_SIZE, SLOTTED_SLOT_SIZE};
 
     /// Kiểm tra các invariant cơ bản của PageHeader.
     /// Lưu ý: kiểm tra ở cấp struct (snapshot), chưa liên quan đến on-disk bytes.
     fn check_invariants(h: &PageHeader) {
+        let header_size = SLOTTED_HEADER_SIZE as u16;
+        let slot_size = SLOTTED_SLOT_SIZE as u16;
+        let page_size = PAGE_SIZE as u16;
+
         // lower phải bắt đầu sau header
-        assert!(h.lower() >= HEADER_SIZE, "lower must be >= HEADER_SIZE");
+        assert!(h.lower() >= header_size, "lower must be >= HEADER_SIZE");
 
         // upper không được vượt quá kích thước page
-        assert!(h.upper() <= PAGE_SIZE as u16, "upper must be <= PAGE_SIZE");
+        assert!(h.upper() <= page_size, "upper must be <= PAGE_SIZE");
 
         // lower luôn nằm trước hoặc bằng upper (free space = upper - lower)
         assert!(h.lower() <= h.upper(), "lower must be <= upper");
 
-        // Nếu bạn chọn quy ước: lower = HEADER_SIZE + slot_count * SLOT_SIZE
-        // thì công thức này phải đúng (slot_count là số slot đã cấp phát).
-        let expected_lower = HEADER_SIZE + h.slot_count() * SLOT_SIZE;
+        let expected_lower = header_size + h.slot_count() * slot_size;
         assert_eq!(
             h.lower(),
             expected_lower,
@@ -79,16 +128,19 @@ mod tests {
 
     #[test]
     fn test_getters() {
+        let header_size = SLOTTED_HEADER_SIZE as u16;
+        let page_size = PAGE_SIZE as u16;
+
         let h = PageHeader {
-            lower: HEADER_SIZE,
-            upper: PAGE_SIZE as u16,
+            lower: header_size,
+            upper: page_size,
             slot_count: 0,
             flags: 0,
             reserved: 0,
         };
 
-        assert_eq!(h.lower(), HEADER_SIZE);
-        assert_eq!(h.upper(), PAGE_SIZE as u16);
+        assert_eq!(h.lower(), header_size);
+        assert_eq!(h.upper(), page_size);
         assert_eq!(h.slot_count(), 0);
         assert_eq!(h.flags(), 0);
         assert_eq!(h.reserved(), 0);
@@ -96,6 +148,9 @@ mod tests {
 
     #[test]
     fn test_flags_bits() {
+        let header_size = SLOTTED_HEADER_SIZE as u16;
+        let page_size = PAGE_SIZE as u16;
+
         // sample
         // - page_type = 2 (btree_internal) ở bits 0..3
         // - HAS_FREE_SLOTS ở bit 4
@@ -103,8 +158,8 @@ mod tests {
         let has_free_slots: u16 = 1 << 4;
 
         let h = PageHeader {
-            lower: HEADER_SIZE,
-            upper: PAGE_SIZE as u16,
+            lower: header_size,
+            upper: page_size,
             slot_count: 0,
             flags: (page_type & 0x000F) | has_free_slots,
             reserved: 0,
@@ -122,13 +177,17 @@ mod tests {
 
     #[test]
     fn test_invariants_ok() {
+        let header_size = SLOTTED_HEADER_SIZE as u16;
+        let slot_size = SLOTTED_SLOT_SIZE as u16;
+        let page_size = PAGE_SIZE as u16;
+
         // valid header theo công thức lower = HEADER + slot_count*SLOT_SIZE
-        let slot_count = 10;
-        let lower = HEADER_SIZE + slot_count * SLOT_SIZE;
+        let slot_count: u16 = 10;
+        let lower = header_size + slot_count * slot_size;
 
         let h = PageHeader {
             lower,
-            upper: PAGE_SIZE as u16,
+            upper: page_size,
             slot_count,
             flags: 0,
             reserved: 0,
@@ -140,10 +199,13 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_invariants_fail_lower_formula() {
+        let header_size = SLOTTED_HEADER_SIZE as u16;
+        let page_size = PAGE_SIZE as u16;
+
         // header sai cần đảm bảo invariant sẽ "bắt lỗi"
         let h = PageHeader {
-            lower: HEADER_SIZE + 1, // sai công thức
-            upper: PAGE_SIZE as u16,
+            lower: header_size + 1, // sai công thức
+            upper: page_size,
             slot_count: 0,
             flags: 0,
             reserved: 0,

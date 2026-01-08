@@ -1,5 +1,5 @@
 // Global constants for the storage engine.
-// Keep this file small and stable.
+// Should keep this file small and stable.
 
 pub const PAGE_SIZE: usize = 4096;
 
