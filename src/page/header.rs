@@ -8,6 +8,7 @@ const OFF_RESERVED: usize = 8;
 
 /// page header fixed 16 bytes, trong đó có 8 bytes là reserved
 /// PageHeader chỉ biểu diễn dữ liệu được lưu trong program, chứ k phải layout dưới disk
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageHeader {
     /// lower >= HEADER_SIZE (16)
     /// upper <= PAGE_SIZE
@@ -33,67 +34,68 @@ pub struct PageHeader {
     reserved: u64,
 }
 
-/// PageHeaderView là view đọc/ghi header trực tiếp trên page bytes (on-disk layout)
-pub struct PageHeaderView<'a> {
-    buf: &'a mut [u8],
-}
-
 impl PageHeader {
     pub fn upper(&self) -> u16 {
-        return self.upper;
+        self.upper
     }
 
     pub fn lower(&self) -> u16 {
-        return self.lower;
+        self.lower
     }
 
     pub fn flags(&self) -> u16 {
-        return self.flags;
+        self.flags
     }
     pub fn slot_count(&self) -> u16 {
-        return self.slot_count;
+        self.slot_count
     }
 
     pub fn reserved(&self) -> u64 {
-        return self.reserved;
+        self.reserved
     }
 }
 
-impl<'a> PageHeaderView<'a> {
-    pub fn new(buf: &'a mut [u8]) -> DbResult<Self> {
-        todo!()
-    }
+/// các public function thể hiện view đọc/ghi header trực tiếp trên page bytes (on-disk layout)
+/// đổi sang KHÔNG sử dụng struct vì k muốn mess với lifetime trong rust
+pub fn init_empty(buf: &mut [u8], page_type: u16) -> DbResult<()> {
+    // flags = (page_type & 0x000F)
+    todo!()
+}
 
-    pub fn lower(&self) -> DbResult<u16> {
-        todo!()
-    }
-    pub fn set_lower(&mut self, v: u16) -> DbResult<()> {
-        todo!()
-    }
-    pub fn upper(&self) -> DbResult<u16> {
-        todo!()
-    }
-    pub fn set_upper(&mut self, v: u16) -> DbResult<()> {
-        todo!()
-    }
-    pub fn slot_count(&self) -> DbResult<u16> {
-        todo!()
-    }
-    pub fn set_slot_count(&mut self, v: u16) -> DbResult<()> {
-        todo!()
-    }
-    pub fn flags(&self) -> DbResult<u16> {
-        todo!()
-    }
-    pub fn set_flags(&mut self, v: u16) -> DbResult<()> {
-        todo!()
-    }
-    pub fn reserved(&self) -> DbResult<u64> {
-        todo!()
-    }
-    pub fn set_reserved(&mut self, v: u64) -> DbResult<()> {
-        todo!()
-    }
+pub fn validate(buf: &[u8]) -> DbResult<()> {
+    // minium check buf.len() >= SLOTTED_HEADER_SIZE
+    todo!()
+}
+
+pub fn lower(buf: &[u8]) -> DbResult<u16> {
+    todo!()
+}
+pub fn set_lower(buf: &mut [u8], v: u16) -> DbResult<()> {
+    todo!()
+}
+pub fn upper(buf: &[u8]) -> DbResult<u16> {
+    todo!()
+}
+pub fn set_upper(buf: &mut [u8], v: u16) -> DbResult<()> {
+    todo!()
+}
+pub fn slot_count(buf: &mut [u8]) -> DbResult<u16> {
+    todo!()
+}
+pub fn set_slot_count(buf: &mut [u8], v: u16) -> DbResult<()> {
+    todo!()
+}
+pub fn flags(buf: &[u8]) -> DbResult<u16> {
+    todo!()
+}
+pub fn set_flags(buf: &mut [u8], v: u16) -> DbResult<()> {
+    todo!()
+}
+pub fn reserved(buf: &[u8]) -> DbResult<u64> {
+    todo!()
+}
+pub fn set_reserved(buf: &mut [u8], v: u64) -> DbResult<()> {
+    todo!()
 }
 
 #[cfg(test)]
