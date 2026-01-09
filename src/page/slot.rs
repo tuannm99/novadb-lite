@@ -1,5 +1,6 @@
-use crate::DbResult;
+use crate::{DbError, DbResult};
 
+use super::raw::{read_u16_le, write_u16_le};
 use super::{SLOTTED_HEADER_SIZE, SLOTTED_SLOT_SIZE};
 
 /// bitmask value
@@ -43,14 +44,32 @@ pub fn slot_off(slot_id: u16) -> usize {
     SLOTTED_HEADER_SIZE + slot_id as usize * SLOTTED_SLOT_SIZE
 }
 
+fn current_pos(buf: &[u8], slot_id: u16) -> DbResult<usize> {
+    let base = slot_off(slot_id);
+    if base + SLOTTED_SLOT_SIZE > buf.len() {
+        return Err(DbError::Corruption("slot entry out of bounds"));
+    }
+    Ok(base)
+}
+
 pub fn read_slot(buf: &[u8], slot_id: u16) -> DbResult<Slot> {
-    // NEED CHECK: base + SLOTTED_SLOT_SIZE <= buf.len()
-    todo!()
+    let pos = current_pos(buf, slot_id)?;
+
+    let offset = read_u16_le(buf, pos + OFF_SLOT_OFFSET)?;
+    let len = read_u16_le(buf, pos + OFF_SLOT_LEN)?;
+    let flags = read_u16_le(buf, pos + OFF_SLOT_FLAGS)?;
+
+    Ok(Slot { offset, len, flags })
 }
 
 pub fn write_slot(buf: &mut [u8], slot_id: u16, slot: &Slot) -> DbResult<()> {
-    // NEED CHECK: base + SLOTTED_SLOT_SIZE <= buf.len()
-    todo!()
+    let pos = current_pos(buf, slot_id)?;
+
+    write_u16_le(buf, pos + OFF_SLOT_OFFSET, slot.offset)?;
+    write_u16_le(buf, pos + OFF_SLOT_LEN, slot.len)?;
+    write_u16_le(buf, pos + OFF_SLOT_FLAGS, slot.flags)?;
+
+    Ok(())
 }
 
 pub fn is_dead(flags: u16) -> bool {
@@ -66,4 +85,51 @@ pub fn is_overflow(flags: u16) -> bool {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::constants::PAGE_SIZE;
+
+    #[test]
+    fn test_read_write_roundtrip() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+
+        let slot = Slot {
+            offset: 123,
+            len: 45,
+            flags: 0x0002,
+        };
+
+        write_slot(&mut buf, 0, &slot).unwrap();
+        let got = read_slot(&buf, 0).unwrap();
+
+        assert_eq!(got, slot);
+    }
+
+    #[test]
+    fn test_slot_out_of_bounds() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let slot = Slot {
+            offset: 1,
+            len: 1,
+            flags: 0,
+        };
+
+        // slot_id cực lớn => base vượt page
+        assert!(write_slot(&mut buf, u16::MAX, &slot).is_err());
+        assert!(read_slot(&buf, u16::MAX).is_err());
+    }
+
+    #[test]
+    fn test_is_dead() {
+        assert!(is_dead(1 << 0));
+        assert!(!is_dead(0));
+    }
+
+    #[test]
+    fn test_flags_helpers() {
+        assert!(is_redirected(1 << 1));
+        assert!(is_overflow(1 << 2));
+        assert!(!is_redirected(0));
+        assert!(!is_overflow(0));
+    }
+}
