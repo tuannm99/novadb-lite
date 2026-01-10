@@ -21,9 +21,9 @@ const OFF_SLOT_FLAGS: usize = 4;
 /// slot(i) = HEADER_SIZE + i*SLOT_SIZE
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot {
-    offset: u16,
-    len: u16,
-    flags: u16,
+    pub offset: u16,
+    pub len: u16,
+    pub flags: u16,
 }
 
 impl Slot {
