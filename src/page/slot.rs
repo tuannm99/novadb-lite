@@ -7,7 +7,7 @@ use super::{SLOTTED_HEADER_SIZE, SLOTTED_SLOT_SIZE};
 /// 0: DELETED
 /// 1: REDIRECTED
 /// 2: OVERFLOW
-/// 3..8 -> reserved - mở rộng nếu có thể
+/// 3..15 -> reserved - mở rộng nếu có thể
 const SLOT_DEAD: u16 = 1 << 0;
 const SLOT_REDIRECTED: u16 = 1 << 1;
 const SLOT_OVERFLOW: u16 = 1 << 2;
@@ -21,12 +21,16 @@ const OFF_SLOT_FLAGS: usize = 4;
 /// slot(i) = HEADER_SIZE + i*SLOT_SIZE
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Slot {
-    pub offset: u16,
-    pub len: u16,
-    pub flags: u16,
+    offset: u16,
+    len: u16,
+    flags: u16,
 }
 
 impl Slot {
+    pub fn new(offset: u16, len: u16, flags: u16) -> Self {
+        Slot { offset, len, flags }
+    }
+
     pub fn offset(&self) -> u16 {
         self.offset
     }
@@ -37,6 +41,10 @@ impl Slot {
 
     pub fn flags(&self) -> u16 {
         self.flags
+    }
+
+    pub fn mark_flags_dead(&mut self) {
+        self.flags |= SLOT_DEAD;
     }
 }
 
