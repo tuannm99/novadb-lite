@@ -25,15 +25,39 @@ impl<'a> SlottedPage<'a> {
     /// - slot_count = 0
     /// - flags = page_type (bits 0..3)
     pub fn init(&mut self, page_type: u16) -> DbResult<()> {
-        header::init_empty(self.buf, page_type)?;
+        header::init_empty(self.buf, page_type)
+    }
+
+    #[cfg(debug_assertions)]
+    pub fn validate_full(&self) -> DbResult<()> {
+        self.validate_header()?;
+
+        let up = header::upper(self.buf)? as usize;
+        let sc = header::slot_count(self.buf)? as usize;
+
+        for slot_id in 0..sc {
+            let s = slot::read_slot(self.buf, slot_id as u16)?;
+            if !slot::is_dead(s.flags()) {
+                let start = s.offset() as usize;
+                let len = s.len() as usize;
+                let end = start
+                    .checked_add(len)
+                    .ok_or(DbError::Corruption("tuple end overflow"))?;
+                if end > PAGE_SIZE {
+                    return Err(DbError::Corruption("corrupt slot: tuple out of bounds"));
+                }
+                if start < up {
+                    return Err(DbError::Corruption(
+                        "corrupt slot: tuple overlaps free space",
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
-    pub fn validate(&self) -> DbResult<()> {
-        // 1) buffer size
-        header::validate(self.buf)?;
-
-        // 2) header fields
+    pub fn validate_header(&self) -> DbResult<()> {
+        // header fields
         let lo = header::lower(self.buf)? as usize;
         let up = header::upper(self.buf)? as usize;
         let sc = header::slot_count(self.buf)? as usize;
@@ -54,30 +78,24 @@ impl<'a> SlottedPage<'a> {
         }
 
         // lower phải đúng công thức slot directory
-        let expected_lo = SLOTTED_HEADER_SIZE + sc * SLOTTED_SLOT_SIZE;
+        let slot_bytes = sc
+            .checked_mul(SLOTTED_SLOT_SIZE)
+            .ok_or(DbError::Corruption("corrupt header: slot_count overflow"))?;
+
+        let expected_lo = SLOTTED_HEADER_SIZE
+            .checked_add(slot_bytes)
+            .ok_or(DbError::Corruption("corrupt header: lower overflow"))?;
+
+        if expected_lo > PAGE_SIZE {
+            return Err(DbError::Corruption(
+                "corrupt header: slot directory out of page",
+            ));
+        }
         if lo != expected_lo {
             return Err(DbError::Corruption(
                 "corrupt header: lower != header_size + slot_count*slot_size",
             ));
         }
-
-        // scan slot bounds để bắt corruption sớm
-        for slot_id in 0..sc {
-            let s = slot::read_slot(self.buf, slot_id as u16)?;
-            if !slot::is_dead(s.flags()) {
-                let start = s.offset() as usize;
-                let end = start + s.len() as usize;
-                if end > PAGE_SIZE {
-                    return Err(DbError::Corruption("corrupt slot: tuple out of bounds"));
-                }
-                if start < up {
-                    return Err(DbError::Corruption(
-                        "corrupt slot: tuple overlaps free space",
-                    ));
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -89,8 +107,43 @@ impl<'a> SlottedPage<'a> {
             .ok_or(DbError::Corruption("corrupt header: lower > upper"))
     }
 
+    /// Lấy record bytes theo slot_id.
+    /// Trả None nếu slot DEAD.
+    /// Các check cần có:
+    /// - slot_id < slot_count
+    /// - slot.offset + slot.len <= PAGE_SIZE
+    pub fn get(&self, slot_id: u16) -> DbResult<Option<&[u8]>> {
+        // pub fn get<'b>(&'b self, slot_id: u16) -> DbResult<Option<&'b [u8]>> {
+        self.validate_header()?;
+
+        let sc = header::slot_count(self.buf)?;
+        if slot_id >= sc {
+            return Err(DbError::InvalidArgument("invalid slot_id"));
+        }
+
+        let slot = slot::read_slot(self.buf, slot_id)?;
+        if slot::is_dead(slot.flags()) {
+            return Ok(None);
+        }
+
+        let start = slot.offset() as usize;
+        let up = header::upper(self.buf)? as usize;
+        if start < up {
+            return Err(DbError::Corruption("tuple overlaps free space"));
+        }
+
+        let len = slot.len() as usize;
+        let end = start
+            .checked_add(len)
+            .ok_or(DbError::Corruption("tuple end overflow"))?;
+        if end > PAGE_SIZE {
+            return Err(DbError::Corruption("tuple end must be <= PAGE_SIZE"));
+        }
+
+        Ok(Some(&self.buf[start..end]))
+    }
+
     /// Insert record bytes vào page.
-    /// Ý tưởng thuật toán:
     /// 1) Đọc lower/upper/slot_count.
     /// 2) Tìm slot tombstone để reuse (nếu muốn reuse), hoặc cấp slot_id mới.
     /// 3) Tính upper_new = upper - data.len()
@@ -104,7 +157,7 @@ impl<'a> SlottedPage<'a> {
         // PAGE_LAYOUT: <Header 16bytes> <Lower|slot1,slot2,...> .... <Upper|dataN,data2,data1>
         //                                grows ->                      grows <-
         //                                        <---- free space ---->
-        self.validate()?;
+        self.validate_header()?;
 
         let up = header::upper(self.buf)?;
         let slot_count = header::slot_count(self.buf)?;
@@ -125,8 +178,13 @@ impl<'a> SlottedPage<'a> {
         } else {
             SLOTTED_SLOT_SIZE as u16
         };
-        if need_data_len + need_slot > self.free_space()? {
-            return Err(DbError::Corruption("not enough space"));
+
+        let need_total = need_data_len
+            .checked_add(need_slot)
+            .ok_or(DbError::Corruption("need size overflow"))?;
+
+        if need_total > self.free_space()? {
+            return Err(DbError::NoSpace("not enough space"));
         }
 
         let upper_new = up
@@ -148,51 +206,106 @@ impl<'a> SlottedPage<'a> {
             let lower_new =
                 SLOTTED_HEADER_SIZE as u16 + (slot_count + 1) * SLOTTED_SLOT_SIZE as u16;
             header::set_lower(self.buf, lower_new)?;
-        } else {
-            // CLEAR HAS_FREE_SLOTS
-            // "bit này chỉ là optimization, hiện tại không clear để đơn giản;
-            // find_free_slot sẽ tự scan và return None nếu hết tombstone."
         }
+
         header::set_upper(self.buf, upper_new)?;
         Ok(slot_id)
     }
 
-    /// Lấy record bytes theo slot_id.
-    /// Trả None nếu slot DEAD.
-    /// Các check cần có:
-    /// - slot_id < slot_count
-    /// - slot.offset + slot.len <= PAGE_SIZE
-    pub fn get<'b>(&'b self, slot_id: u16) -> DbResult<Option<&'b [u8]>> {
-        self.validate()?;
+    /// Update record bytes tại slot_id.
+    ///
+    /// Có 3 case:
+    /// 1) Slot DEAD -> return error.
+    /// 2) data.len() <= old_len:
+    ///    - update in-place tại vùng tuple hiện tại
+    ///    - (tuỳ chọn) zero phần thừa để debug
+    ///    - update slot.len = data.len()
+    ///    - return Ok(false)  // moved = false
+    /// 3) data.len() > old_len:
+    ///    - allocate vùng data mới ở phía upper (giống insert, nhưng reuse slot entry)
+    ///    - copy data mới vào [upper_new..upper)
+    ///    - update slot.offset = upper_new, slot.len = data.len()
+    ///    - update header.upper = upper_new
+    ///    - data cũ trở thành garbage, sẽ được reclaim khi vacuum/compact
+    ///    - return Ok(true)   // moved = true
+    ///
+    /// Return:
+    /// - Ok(false) => in-place (case 2)
+    /// - Ok(true)  => moved (case 3)
+    pub fn update(&mut self, slot_id: u16, data: &[u8]) -> DbResult<bool> {
+        self.validate_header()?;
 
         let sc = header::slot_count(self.buf)?;
         if slot_id >= sc {
-            return Err(DbError::Corruption("invalid slot_id"));
+            return Err(DbError::InvalidArgument("invalid slot_id"));
         }
 
         let slot = slot::read_slot(self.buf, slot_id)?;
         if slot::is_dead(slot.flags()) {
-            return Ok(None);
+            return Err(DbError::Corruption("slot is dead"));
         }
 
-        let start = slot.offset() as usize;
-        let end = (slot.offset() + slot.len()) as usize;
-        if end > PAGE_SIZE {
-            return Err(DbError::Corruption("tuple end must be <= PAGE_SIZE"));
+        let need: u16 = data
+            .len()
+            .try_into()
+            .map_err(|_| DbError::Corruption("record is too large"))?;
+
+        let old_len = slot.len();
+
+        // Case 2: in-place
+        if need <= old_len {
+            let start = slot.offset() as usize;
+            let end_new = start + need as usize;
+            let end_old = start + old_len as usize;
+
+            self.buf[start..end_new].copy_from_slice(data);
+
+            // zero phần thừa
+            self.buf[end_new..end_old].fill(0);
+
+            slot::write_slot(
+                self.buf,
+                slot_id,
+                &slot::Slot::new(slot.offset(), need, slot.flags()),
+            )?;
+            return Ok(false);
         }
 
-        Ok(Some(&self.buf[start..end]))
+        // Case 3: move tuple (reuse same slot_id)
+        let free = self.free_space()?;
+        if need > free {
+            return Err(DbError::NoSpace("not enough space"));
+        }
+
+        let up = header::upper(self.buf)?;
+        let upper_new = up
+            .checked_sub(need)
+            .ok_or(DbError::Corruption("record is too large"))?;
+
+        let upper_new_usize = upper_new as usize;
+        let up_usize = up as usize;
+
+        self.buf[upper_new_usize..up_usize].copy_from_slice(data);
+
+        slot::write_slot(
+            self.buf,
+            slot_id,
+            &slot::Slot::new(upper_new, need, slot.flags()),
+        )?;
+        header::set_upper(self.buf, upper_new)?;
+
+        Ok(true)
     }
 
     /// Delete slot_id: set flag DEAD, không reclaim data ngay (tombstone).
     /// để reuse slot:
     /// - set page header flag HAS_FREE_SLOTS (bit 4)
     pub fn delete(&mut self, slot_id: u16) -> DbResult<()> {
-        self.validate()?;
+        self.validate_header()?;
 
         let sc = header::slot_count(self.buf)?;
         if slot_id >= sc {
-            return Err(DbError::Corruption("invalid slot_id"));
+            return Err(DbError::InvalidArgument("invalid slot_id"));
         }
 
         let mut slot = slot::read_slot(self.buf, slot_id)?;
@@ -203,16 +316,17 @@ impl<'a> SlottedPage<'a> {
         slot::write_slot(self.buf, slot_id, &slot)?;
 
         let page_flags = header::flags(self.buf)?;
-        header::set_flags(self.buf, page_flags | (1 << 4))?;
+        let new_flags = header::set_flag(page_flags, header::FLAG_HAS_FREE_SLOTS);
+        header::set_flags(self.buf, new_flags)?;
 
         Ok(())
     }
 
     /// Tìm slot tombstone để reuse.
     /// Nếu page header có HAS_FREE_SLOTS thì scan slot directory, return slot_id đầu tiên DEAD.
-    fn find_free_slot(&self) -> DbResult<Option<u16>> {
+    fn find_free_slot(&mut self) -> DbResult<Option<u16>> {
         let page_flags = header::flags(self.buf)?;
-        if (page_flags & (1 << 4)) == 0 {
+        if (page_flags & (header::FLAG_HAS_FREE_SLOTS)) == 0 {
             return Ok(None);
         }
 
@@ -223,6 +337,9 @@ impl<'a> SlottedPage<'a> {
                 return Ok(Some(i));
             }
         }
+
+        let new_flags = header::clear_flag(page_flags, header::FLAG_HAS_FREE_SLOTS);
+        header::set_flags(self.buf, new_flags)?;
 
         Ok(None)
     }

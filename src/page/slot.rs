@@ -46,6 +46,14 @@ impl Slot {
     pub fn mark_flags_dead(&mut self) {
         self.flags |= SLOT_DEAD;
     }
+
+    pub fn mark_flags_redirected(&mut self) {
+        self.flags |= SLOT_REDIRECTED;
+    }
+
+    pub fn mark_flags_overflow(&mut self) {
+        self.flags |= SLOT_OVERFLOW;
+    }
 }
 
 pub fn slot_off(slot_id: u16) -> usize {

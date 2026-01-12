@@ -4,16 +4,16 @@ use std::fmt;
 #[derive(Debug)]
 pub enum DbError {
     Io(std::io::Error),
-
     /// Buffer access went out of bounds.
     OutOfBounds {
         off: usize,
         size: usize,
         len: usize,
     },
-
     /// Data corruption or invariant violation.
     Corruption(&'static str),
+    NoSpace(&'static str),
+    InvalidArgument(&'static str),
 }
 
 impl From<std::io::Error> for DbError {
@@ -30,6 +30,8 @@ impl fmt::Display for DbError {
                 write!(f, "out of bounds: off={} size={} len={}", off, size, len)
             }
             DbError::Corruption(msg) => write!(f, "corruption: {}", msg),
+            DbError::NoSpace(msg) => write!(f, "no space: {}", msg),
+            DbError::InvalidArgument(msg) => write!(f, "invalid args: {}", msg),
         }
     }
 }
