@@ -24,8 +24,9 @@ impl<'a> SlottedPage<'a> {
     /// - upper = PAGE_SIZE
     /// - slot_count = 0
     /// - flags = page_type (bits 0..3)
-    pub fn init(&mut self, page_type: u16) -> DbResult<()> {
-        header::init_empty(self.buf, page_type)
+    pub fn init(self, page_type: u16) -> DbResult<Self> {
+        header::init_empty(self.buf, page_type)?;
+        Ok(self)
     }
 
     #[cfg(debug_assertions)]
@@ -348,6 +349,7 @@ impl<'a> SlottedPage<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page::header::{FLAG_HAS_FREE_SLOTS, PAGE_TYPE_HEAP};
 
     #[test]
     fn test_new_rejects_wrong_size() {
@@ -362,4 +364,61 @@ mod tests {
         let got = SlottedPage::new(&mut buf);
         assert!(got.is_ok(), "new() must accept PAGE_SIZE buffers");
     }
+
+    #[test]
+    fn test_slotted_page_validate() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let slotted_page = SlottedPage::new(&mut buf)
+            .unwrap()
+            .init(PAGE_TYPE_HEAP)
+            .unwrap();
+
+        let free = slotted_page.free_space().unwrap();
+        assert_eq!(free, (PAGE_SIZE - SLOTTED_HEADER_SIZE) as u16);
+
+        slotted_page.validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_slotted_page_get() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut slotted_page = SlottedPage::new(&mut buf)
+            .unwrap()
+            .init(PAGE_TYPE_HEAP)
+            .unwrap();
+
+        // insert 2 records
+        let data1 = "Hello, world".as_bytes();
+        let page_id = slotted_page.insert(data1).unwrap();
+        assert_eq!(page_id, 0);
+
+        let data2 = "Hello, world.. TUANNM".as_bytes();
+        let page_id = slotted_page.insert(data2).unwrap();
+        assert_eq!(page_id, 1);
+
+        let page_header_snapshot = header::decode(slotted_page.buf).unwrap();
+        assert_eq!(
+            page_header_snapshot.lower(),
+            SLOTTED_HEADER_SIZE as u16 + 6 + 6
+        );
+
+        assert_eq!(
+            page_header_snapshot.upper() as usize,
+            PAGE_SIZE - data1.len() - data2.len()
+        );
+
+        assert_eq!(page_header_snapshot.slot_count() as usize, 2);
+    }
+
+    #[test]
+    fn test_slotted_page_insert() {}
+
+    #[test]
+    fn test_slotted_page_update() {}
+
+    #[test]
+    fn test_slotted_page_delete() {}
+
+    #[test]
+    fn test_slotted_page_roundtrip() {}
 }
