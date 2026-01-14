@@ -351,6 +351,10 @@ mod tests {
     use super::*;
     use crate::page::header::{FLAG_HAS_FREE_SLOTS, PAGE_TYPE_HEAP};
 
+    fn make_page(buf: &mut [u8]) -> SlottedPage<'_> {
+        SlottedPage::new(buf).unwrap().init(PAGE_TYPE_HEAP).unwrap()
+    }
+
     #[test]
     fn test_new_rejects_wrong_size() {
         let mut buf = [0u8; 15];
@@ -368,10 +372,7 @@ mod tests {
     #[test]
     fn test_slotted_page_validate() {
         let mut buf = vec![0u8; PAGE_SIZE];
-        let slotted_page = SlottedPage::new(&mut buf)
-            .unwrap()
-            .init(PAGE_TYPE_HEAP)
-            .unwrap();
+        let slotted_page = make_page(&mut buf);
 
         let free = slotted_page.free_space().unwrap();
         assert_eq!(free, (PAGE_SIZE - SLOTTED_HEADER_SIZE) as u16);
@@ -382,10 +383,7 @@ mod tests {
     #[test]
     fn test_slotted_page_get() {
         let mut buf = vec![0u8; PAGE_SIZE];
-        let mut slotted_page = SlottedPage::new(&mut buf)
-            .unwrap()
-            .init(PAGE_TYPE_HEAP)
-            .unwrap();
+        let mut slotted_page = make_page(&mut buf);
 
         // insert 2 records
         let data1 = "Hello, world".as_bytes();
@@ -408,6 +406,58 @@ mod tests {
         );
 
         assert_eq!(page_header_snapshot.slot_count() as usize, 2);
+    }
+
+    #[test]
+    fn test_find_free_slot() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut p = make_page(&mut buf);
+
+        // case: page mới -> chưa có tombstone
+        assert!(p.find_free_slot().unwrap().is_none());
+
+        // insert lần 1 -> tạo slot 0, slot_count/lower tăng đúng công thức
+        let id0 = p.insert(b"Hello, world").unwrap();
+        assert_eq!(id0, 0);
+
+        assert_eq!(header::slot_count(p.buf).unwrap(), 1);
+        assert_eq!(
+            header::lower(p.buf).unwrap() as usize,
+            SLOTTED_HEADER_SIZE + SLOTTED_SLOT_SIZE
+        );
+
+        // case: có data nhưng chưa delete -> vẫn không có tombstone
+        assert!(p.find_free_slot().unwrap().is_none());
+
+        // delete slot 0 -> tạo tombstone + set FLAG_HAS_FREE_SLOTS
+        assert!(p.delete(0).is_ok());
+        assert!(p.find_free_slot().unwrap().is_some());
+
+        // insert reuse tombstone -> reuse slot_id=0, slot_count không tăng
+        let id_reuse = p.insert(b"Hello, ").unwrap();
+        assert_eq!(id_reuse, 0);
+        assert_eq!(header::slot_count(p.buf).unwrap(), 1);
+
+        // case: lúc này không còn DEAD slot (nhưng flag sẽ được clear lazy khi gọi find_free_slot)
+        assert!(p.find_free_slot().unwrap().is_none());
+
+        // delete lần nữa -> set flag lại, slot 0 thành DEAD
+        assert!(p.delete(0).is_ok());
+
+        // insert record lớn -> vẫn reuse slot 0 (data ghi sang vùng bytes mới), flag vẫn còn stale trước khi scan
+        let id_reuse2 = p.insert(b"Hello, Tuannm string larger").unwrap();
+        assert_eq!(id_reuse2, 0);
+
+        // flags: chưa được clear (insert không clear, chỉ clear khi scan)
+        let flags = header::flags(p.buf).unwrap();
+        assert_eq!(flags & FLAG_HAS_FREE_SLOTS, FLAG_HAS_FREE_SLOTS);
+
+        // gọi find_free_slot -> scan không thấy DEAD slot => clear flag
+        assert!(p.find_free_slot().unwrap().is_none());
+
+        // flags: đã được clear
+        let flags = header::flags(p.buf).unwrap();
+        assert_eq!(flags & FLAG_HAS_FREE_SLOTS, 0);
     }
 
     #[test]
