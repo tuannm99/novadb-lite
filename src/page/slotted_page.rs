@@ -461,14 +461,202 @@ mod tests {
     }
 
     #[test]
-    fn test_slotted_page_insert() {}
+    fn test_slotted_page_insert() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut p = make_page(&mut buf);
+
+        let free0 = p.free_space().unwrap();
+        assert_eq!(free0 as usize, PAGE_SIZE - SLOTTED_HEADER_SIZE);
+
+        // insert 1
+        let d1 = b"abc";
+        let id0 = p.insert(d1).unwrap();
+        assert_eq!(id0, 0);
+
+        // header after insert
+        assert_eq!(header::slot_count(p.buf).unwrap(), 1);
+        assert_eq!(
+            header::lower(p.buf).unwrap() as usize,
+            SLOTTED_HEADER_SIZE + SLOTTED_SLOT_SIZE
+        );
+        assert_eq!(header::upper(p.buf).unwrap() as usize, PAGE_SIZE - d1.len());
+
+        // get đúng data
+        let got = p.get(id0).unwrap().unwrap();
+        assert_eq!(got, d1);
+
+        // insert 2
+        let d2 = b"hello world";
+        let id1 = p.insert(d2).unwrap();
+        assert_eq!(id1, 1);
+
+        assert_eq!(header::slot_count(p.buf).unwrap(), 2);
+        assert_eq!(
+            header::lower(p.buf).unwrap() as usize,
+            SLOTTED_HEADER_SIZE + 2 * SLOTTED_SLOT_SIZE
+        );
+        assert_eq!(
+            header::upper(p.buf).unwrap() as usize,
+            PAGE_SIZE - d1.len() - d2.len()
+        );
+
+        let got2 = p.get(id1).unwrap().unwrap();
+        assert_eq!(got2, d2);
+
+        // insert quá lớn -> NoSpace
+        let free = p.free_space().unwrap() as usize;
+
+        // nếu cấp slot mới thì cần thêm slot bytes; ta tạo payload chắc chắn vượt
+        let huge = vec![0u8; free + 1];
+        let err = p.insert(&huge).unwrap_err();
+        match err {
+            DbError::NoSpace(_) => {}
+            other => panic!("expected NoSpace, got: {:?}", other),
+        }
+
+        // validate
+        p.validate_header().unwrap();
+        #[cfg(debug_assertions)]
+        p.validate_full().unwrap();
+    }
 
     #[test]
-    fn test_slotted_page_update() {}
+    fn test_slotted_page_update() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut p = make_page(&mut buf);
+
+        let id = p.insert(b"hello world").unwrap();
+        assert_eq!(id, 0);
+
+        // Case 2: in-place (new <= old)
+        let moved = p.update(id, b"hi").unwrap();
+        assert_eq!(moved, false);
+
+        let got = p.get(id).unwrap().unwrap();
+        assert_eq!(got, b"hi");
+
+        // upper không đổi khi in-place
+        let up_after_inplace = header::upper(p.buf).unwrap();
+
+        // Case 3: moved (new > old)
+        let big = b"this is a longer string than before";
+        let moved2 = p.update(id, big).unwrap();
+        assert_eq!(moved2, true);
+
+        let got2 = p.get(id).unwrap().unwrap();
+        assert_eq!(got2, big);
+
+        // upper phải giảm (vì allocate vùng mới)
+        let up_after_move = header::upper(p.buf).unwrap();
+        assert!(up_after_move < up_after_inplace);
+
+        // update invalid slot_id
+        let err = p.update(99, b"x").unwrap_err();
+        match err {
+            DbError::InvalidArgument(_) => {}
+            other => panic!("expected InvalidArgument, got: {:?}", other),
+        }
+
+        // update DEAD slot -> Corruption("slot is dead")
+        p.delete(id).unwrap();
+        let err = p.update(id, b"x").unwrap_err();
+        match err {
+            DbError::Corruption(_) => {}
+            other => panic!("expected Corruption, got: {:?}", other),
+        }
+
+        p.validate_header().unwrap();
+        #[cfg(debug_assertions)]
+        p.validate_full().unwrap();
+    }
 
     #[test]
-    fn test_slotted_page_delete() {}
+    fn test_slotted_page_delete() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut p = make_page(&mut buf);
+
+        let id0 = p.insert(b"a").unwrap();
+        let id1 = p.insert(b"b").unwrap();
+        assert_eq!(id0, 0);
+        assert_eq!(id1, 1);
+
+        // delete slot 0
+        p.delete(id0).unwrap();
+
+        // get(slot0) -> None
+        assert!(p.get(id0).unwrap().is_none());
+
+        // slot1 vẫn ok
+        assert_eq!(p.get(id1).unwrap().unwrap(), b"b");
+
+        // delete idempotent
+        p.delete(id0).unwrap();
+
+        // flag HAS_FREE_SLOTS phải được set
+        let flags = header::flags(p.buf).unwrap();
+        assert_eq!(flags & FLAG_HAS_FREE_SLOTS, FLAG_HAS_FREE_SLOTS);
+
+        // delete invalid slot_id
+        let err = p.delete(99).unwrap_err();
+        match err {
+            DbError::InvalidArgument(_) => {}
+            other => panic!("expected InvalidArgument, got: {:?}", other),
+        }
+
+        p.validate_header().unwrap();
+        #[cfg(debug_assertions)]
+        p.validate_full().unwrap();
+    }
 
     #[test]
-    fn test_slotted_page_roundtrip() {}
+    fn test_slotted_page_roundtrip() {
+        let mut buf = vec![0u8; PAGE_SIZE];
+        let mut p = make_page(&mut buf);
+
+        // insert nhiều record
+        let id0 = p.insert(b"r0").unwrap();
+        let id1 = p.insert(b"record-1").unwrap();
+        let id2 = p.insert(b"record-2222").unwrap();
+        let id3 = p.insert(b"r3").unwrap();
+
+        assert_eq!(id0, 0);
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(id3, 3);
+
+        // update: in-place
+        assert_eq!(p.update(id1, b"X").unwrap(), false);
+        assert_eq!(p.get(id1).unwrap().unwrap(), b"X");
+
+        // update: moved
+        let big = b"this update will move because it's longer than before";
+        assert_eq!(p.update(id0, big).unwrap(), true);
+        assert_eq!(p.get(id0).unwrap().unwrap(), big);
+
+        // delete 2 slots
+        p.delete(id2).unwrap();
+        p.delete(id3).unwrap();
+        assert!(p.get(id2).unwrap().is_none());
+        assert!(p.get(id3).unwrap().is_none());
+
+        // insert nữa để reuse tombstone (có thể reuse id2 hoặc id3 tuỳ slot scan)
+        let id_reuse = p.insert(b"reuse").unwrap();
+        assert!(
+            id_reuse == id2 || id_reuse == id3,
+            "must reuse a DEAD slot id"
+        );
+        assert_eq!(p.get(id_reuse).unwrap().unwrap(), b"reuse");
+
+        // invariants: header + full validate
+        p.validate_header().unwrap();
+        #[cfg(debug_assertions)]
+        p.validate_full().unwrap();
+
+        // check các slot còn sống phải đọc đúng
+        assert_eq!(p.get(id0).unwrap().unwrap(), big);
+        assert_eq!(p.get(id1).unwrap().unwrap(), b"X");
+        // id2/id3: một cái có thể đã được reuse, cái còn lại vẫn None
+        let other_dead = if id_reuse == id2 { id3 } else { id2 };
+        assert!(p.get(other_dead).unwrap().is_none());
+    }
 }
