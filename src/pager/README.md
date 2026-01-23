@@ -16,7 +16,7 @@ Pager không biết SQL, không biết B-Tree/Heap logic; chỉ biết:
 
 ### PageId
 
-- `type PageId = u32;` (hoặc u64)
+- `type PageId = u32;`
 
 ### Read/Write contract
 
@@ -35,8 +35,8 @@ Pager không biết SQL, không biết B-Tree/Heap logic; chỉ biết:
 ## Page types / invariants
 
 - Page bytes luôn được validate ở 2 tầng:
-  1. Pager validate “physical” (đúng size, đúng offset)
-  2. `page/` validate “logical” (header/slot invariants)
+  1. Pager validate "physical" (đúng size, đúng offset)
+  2. `page/` validate "logical" (header/slot invariants)
 
 Pager không cần hiểu `page_type`, nhưng vẫn có thể hỗ trợ debug:
 
@@ -81,14 +81,8 @@ Pager không cần hiểu `page_type`, nhưng vẫn có thể hỗ trợ debug:
 
 - alloc page -> init slotted -> insert/get/delete -> write -> read lại -> validate ok
 
-> Mọi test có thể in log bằng `println!` và chạy với:
->
 > - `cargo test -- --nocapture`
->
-> Coverage (gợi ý):
->
 > - `cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info`
-> - hoặc `cargo tarpaulin` (tuỳ môi trường)
 
 ---
 
