@@ -1,27 +1,44 @@
-use crate::constants::PAGE_SIZE;
-use crate::PageId;
+use std::fs::{File, OpenOptions};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct FilePager {}
+use crate::constants::PAGE_SIZE;
+use crate::{DbError, DbResult, PageId};
+
+pub struct FilePager {
+    pub f: File,
+}
 
 impl FilePager {
-    pub fn open(path: String) {
+    pub fn open(path: String) -> DbResult<FilePager> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
+
+        Ok(FilePager { f: file })
+    }
+
+    pub fn read_page(&mut self, pid: PageId) -> [u8; PAGE_SIZE] {
         todo!()
     }
 
-    pub fn read_page(pid: PageId) -> [u8; PAGE_SIZE] {
+    pub fn write_page(&mut self, pid: PageId, data: &[u8]) {
         todo!()
     }
 
-    pub fn write_page(pid: PageId, data: &[u8]) {
+    pub fn alloc_page(&mut self) {
         todo!()
     }
 
-    pub fn alloc_page() {
+    pub fn free_page(&mut self, pid: PageId) {
         todo!()
     }
 
-    pub fn free_page(pid: PageId) {
+    pub fn flush(&mut self) {
+        todo!()
+    }
+
+    pub fn num_pages(&self) {
         todo!()
     }
 }
