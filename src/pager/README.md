@@ -16,7 +16,8 @@ Pager không biết SQL, không biết B-Tree/Heap logic; chỉ biết:
 
 ### PageId
 
-- `type PageId = u32;`
+- pub struct PageId(pub u32);
+- reserve pid=0 -- meta.
 
 ### Read/Write contract
 
@@ -74,7 +75,7 @@ Pager không cần hiểu `page_type`, nhưng vẫn có thể hỗ trợ debug:
 
 - `alloc_page` tăng pid đúng
 - `write_page` rồi `read_page` roundtrip
-- `free_page` rồi `alloc_page` reuse pid
+  -jj `free_page` rồi `alloc_page` reuse pid
 - pid out of range => error (English messages)
 
 ### Integration tests (pager + page/)

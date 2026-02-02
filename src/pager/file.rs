@@ -1,44 +1,89 @@
 use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 
 use crate::constants::PAGE_SIZE;
 use crate::{DbError, DbResult, PageId};
 
+use super::pager::Pager;
+
 pub struct FilePager {
-    pub f: File,
+    f: File,
+    freelist: Vec<PageId>,
+    next_pid: PageId, // nếu freelist trống, lấy id page kế tiếp
+}
+
+impl Pager for FilePager {
+    fn num_pages(&mut self) -> DbResult<u64> {
+        let len = self.f.metadata()?.len();
+        Ok(len / PAGE_SIZE as u64)
+    }
+
+    fn read_page(&mut self, pid: PageId, out: &mut [u8]) -> DbResult<()> {
+        todo!()
+    }
+
+    fn write_page(&mut self, pid: PageId, buf: &[u8]) -> DbResult<()> {
+        todo!()
+    }
+
+    fn alloc_page(&mut self) -> DbResult<PageId> {
+        todo!()
+    }
+
+    fn free_page(&mut self, pid: PageId) -> DbResult<()> {
+        todo!()
+    }
+
+    fn flush(&mut self) -> DbResult<()> {
+        // gọi fsync xuống disk
+        self.f.sync_data()?;
+        Ok(())
+    }
 }
 
 impl FilePager {
-    pub fn open(path: String) -> DbResult<FilePager> {
-        let file = OpenOptions::new()
+    pub fn open(path: String) -> DbResult<Self> {
+        let mut file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .open(path)?;
 
-        Ok(FilePager { f: file })
+        let len = file.metadata()?.len();
+        if len % (PAGE_SIZE as u64) != 0 {
+            return Err(DbError::Corruption("db file length is not page-aligned"));
+        }
+
+        let pages = (len / PAGE_SIZE as u64) as u32;
+
+        // Reserve page 0 cho meta
+        // Nếu chưa tồn tại file, chắc chắn page meta (0) tồn tại
+        let next_pid = if pages == 0 {
+            let zero = [0u8; PAGE_SIZE];
+            file.write_all(&zero)?;
+            file.flush()?;
+            PageId(1)
+        } else {
+            PageId(pages)
+        };
+
+        Ok(Self {
+            f: file,
+            freelist: Vec::new(),
+            next_pid,
+        })
     }
 
-    pub fn read_page(&mut self, pid: PageId) -> [u8; PAGE_SIZE] {
-        todo!()
-    }
-
-    pub fn write_page(&mut self, pid: PageId, data: &[u8]) {
-        todo!()
-    }
-
-    pub fn alloc_page(&mut self) {
-        todo!()
-    }
-
-    pub fn free_page(&mut self, pid: PageId) {
-        todo!()
-    }
-
-    pub fn flush(&mut self) {
-        todo!()
-    }
-
-    pub fn num_pages(&self) {
-        todo!()
+    #[inline]
+    pub fn seek_to(&mut self, pid: PageId) -> DbResult<()> {
+        // move pointer đến page tương ứng -> pid * PAGE_SIZE
+        let off = (pid.as_u64())
+            .checked_mul(PAGE_SIZE as u64)
+            .ok_or(DbError::Corruption("page offset overflow"))?;
+        self.f.seek(SeekFrom::Start(off))?;
+        Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {}
